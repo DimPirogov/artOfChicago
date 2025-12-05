@@ -102,3 +102,28 @@
 	position: relative;
 	display: block;
 }
+
+/* Header and favorites link/button */
+.startpage-header {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.favorites-link {
+	margin-left: auto;
+	text-decoration: none;
+}
+
+.favorites-nav-btn {
+	font-size: 16px;
+	padding: 6px 10px;
+	border-radius: 6px;
+	border: 1px solid rgba(0, 0, 0, 0.08);
+	background: #fff;
+	cursor: pointer;
+}
+
+.favorites-nav-btn:hover {
+	background: #f6f8fb;
+}

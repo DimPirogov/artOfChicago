@@ -86,6 +86,62 @@ export function useArt(id) {
 	return { art, loading, error };
 }
 
+// Fetch multiple artworks by an iterable of IDs (used for favorites page)
+export function useFavoriteArtworks(favoritesIterable) {
+	const [arts, setArts] = useState([]);
+	const [loading, setLoading] = useState(false);
+	const [error, setError] = useState(null);
+
+	useEffect(() => {
+		const ids = Array.from(favoritesIterable || []);
+		if (!ids.length) {
+			setArts([]);
+			setLoading(false);
+			return;
+		}
+
+		const controller = new AbortController();
+		let isMounted = true;
+
+		async function fetchFavorites() {
+			setLoading(true);
+			setError(null);
+			try {
+				const fieldList = encodeURIComponent(
+					"id,title,image_id,artist_title,date_display,thumbnail"
+				);
+				const promises = ids.map((id) =>
+					fetch(
+						`https://api.artic.edu/api/v1/artworks/${id}?fields=${fieldList}`,
+						{ signal: controller.signal }
+					).then((res) => {
+						if (!res.ok) throw new Error(`HTTP ${res.status}`);
+						return res.json();
+					})
+				);
+
+				const results = await Promise.all(promises);
+				const data = results.map((r) => r.data).filter(Boolean);
+				if (isMounted) setArts(data);
+			} catch (err) {
+				if (err.name !== "AbortError")
+					setError(err.message || "Failed to load");
+			} finally {
+				if (isMounted) setLoading(false);
+			}
+		}
+
+		fetchFavorites();
+
+		return () => {
+			isMounted = false;
+			controller.abort();
+		};
+	}, [favoritesIterable]);
+
+	return { arts, loading, error };
+}
+
 // Favorites management (localStorage)
 const FAVORITES_KEY = "artofchicago:favorites";
 

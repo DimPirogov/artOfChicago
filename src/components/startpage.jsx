@@ -15,7 +15,16 @@ const Startpage = () => {
 
 	return (
 		<main className="startpage-container">
-			<h1 className="startpage-title">Art Institute — Artworks</h1>
+			<header className="startpage-header">
+				<h1 className="startpage-title" style={{ margin: 0 }}>
+					Art Institute — Artworks
+				</h1>
+				<Link to="/favorites" className="favorites-link">
+					<button className="favorites-nav-btn" title="View favorites">
+						Favorites
+					</button>
+				</Link>
+			</header>
 
 			{error && <div className="startpage-error">Error: {error}</div>}
 			{loading && <div className="startpage-loading">Loading artworks…</div>}
