@@ -1,13 +1,23 @@
 import { useEffect, useState } from "react";
 
+// Helper to return an image URL. Accepts either a full URL (from other APIs)
+// or an IIIF image id (from the Art Institute); if it's a URL we return it
+// directly, otherwise we build an IIIF URL.
 export const iiifImageUrl = (image_id, width = 400) => {
 	if (!image_id) return null;
-	return `https://www.artic.edu/iiif/2/${image_id}/full/${width},/0/default.jpg`;
+	try {
+		new URL(image_id);
+		return image_id; // already a URL
+	} catch (err) {
+		// reference the caught error so tooling doesn't mark it unused
+		void err;
+		// not a URL — treat as IIIF id
+		return `https://www.artic.edu/iiif/2/${image_id}/full/${width},/0/default.jpg`;
+	}
 };
 
 export function useArtworks(options = {}) {
-	const { limit = 12, fields = "id,title,image_id,artist_title,date_display" } =
-		options;
+	const { limit = 12, query = "painting", includeNoImage = false } = options;
 	const [artworks, setArtworks] = useState([]);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState(null);
@@ -20,15 +30,56 @@ export function useArtworks(options = {}) {
 			setLoading(true);
 			setError(null);
 			try {
-				const res = await fetch(
-					`https://api.artic.edu/api/v1/artworks?limit=${limit}&fields=${encodeURIComponent(
-						fields
-					)}`,
-					{ signal: controller.signal }
+				// Search The Met Collection API for objects that have images.
+				const searchUrl = `https://collectionapi.metmuseum.org/public/collection/v1/search?hasImages=true&q=${encodeURIComponent(
+					query
+				)}`;
+				const sres = await fetch(searchUrl, { signal: controller.signal });
+				if (!sres.ok) throw new Error(`HTTP ${sres.status}`);
+				const sjson = await sres.json();
+				// fetch a larger slice of IDs so we can filter out objects
+				// that don't have images and still end up with `limit` items.
+				const candidateCount = Math.max(limit * 3, limit + 10);
+				const ids = Array.isArray(sjson.objectIDs)
+					? sjson.objectIDs.slice(0, candidateCount)
+					: [];
+
+				const promises = ids.map((id) =>
+					fetch(
+						`https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`,
+						{ signal: controller.signal }
+					).then((r) => {
+						if (!r.ok) throw new Error(`HTTP ${r.status}`);
+						return r.json();
+					})
 				);
-				if (!res.ok) throw new Error(`HTTP ${res.status}`);
-				const json = await res.json();
-				if (isMounted) setArtworks(json.data || []);
+
+				const results = await Promise.all(promises);
+				const mapped = results.map((o) => ({
+					id: o.objectID,
+					// store an actual image URL in `image_id` so components that expect
+					// `iiifImageUrl(image_id)` still work (iiifImageUrl will detect URLs)
+					image_id:
+						o.primaryImage ||
+						o.primaryImageSmall ||
+						(o.additionalImages && o.additionalImages[0]) ||
+						null,
+					title: o.title,
+					artist_title: o.artistDisplayName,
+					date_display: o.objectDate,
+					medium_display: o.medium,
+					dimensions: o.dimensions,
+					credit_line: o.creditLine,
+					thumbnail: { url: o.primaryImageSmall },
+				}));
+
+				// Optionally filter out items with no image to avoid empty cards.
+				const filtered = includeNoImage
+					? mapped
+					: mapped.filter((a) => !!a.image_id);
+				// Trim to requested limit
+				const finalList = filtered.slice(0, limit);
+				if (isMounted) setArtworks(finalList || []);
 			} catch (err) {
 				if (err.name !== "AbortError")
 					setError(err.message || "Failed to load");
@@ -42,7 +93,7 @@ export function useArtworks(options = {}) {
 			isMounted = false;
 			controller.abort();
 		};
-	}, [limit, fields]);
+	}, [limit, query, includeNoImage]);
 
 	return { artworks, loading, error };
 }
@@ -61,13 +112,29 @@ export function useArt(id) {
 			setLoading(true);
 			setError(null);
 			try {
+				// Use The Met Museum API for object details
 				const res = await fetch(
-					`https://api.artic.edu/api/v1/artworks/${id}?fields=id,title,image_id,artist_title,date_display,medium_display,dimensions,credit_line,thumbnail`,
+					`https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`,
 					{ signal: controller.signal }
 				);
 				if (!res.ok) throw new Error(`HTTP ${res.status}`);
-				const json = await res.json();
-				if (isMounted) setArt(json.data || null);
+				const o = await res.json();
+				const mapped = {
+					id: o.objectID,
+					image_id:
+						o.primaryImage ||
+						o.primaryImageSmall ||
+						(o.additionalImages && o.additionalImages[0]) ||
+						null,
+					title: o.title,
+					artist_title: o.artistDisplayName,
+					date_display: o.objectDate,
+					medium_display: o.medium,
+					dimensions: o.dimensions,
+					credit_line: o.creditLine,
+					thumbnail: { url: o.primaryImageSmall },
+				};
+				if (isMounted) setArt(mapped);
 			} catch (err) {
 				if (err.name !== "AbortError")
 					setError(err.message || "Failed to load");
@@ -107,12 +174,10 @@ export function useFavoriteArtworks(favoritesIterable) {
 			setLoading(true);
 			setError(null);
 			try {
-				const fieldList = encodeURIComponent(
-					"id,title,image_id,artist_title,date_display,thumbnail"
-				);
+				// Fetch details for favorite IDs from The Met API and map to our shape
 				const promises = ids.map((id) =>
 					fetch(
-						`https://api.artic.edu/api/v1/artworks/${id}?fields=${fieldList}`,
+						`https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`,
 						{ signal: controller.signal }
 					).then((res) => {
 						if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -121,7 +186,18 @@ export function useFavoriteArtworks(favoritesIterable) {
 				);
 
 				const results = await Promise.all(promises);
-				const data = results.map((r) => r.data).filter(Boolean);
+				const data = results.map((o) => ({
+					id: o.objectID,
+					image_id:
+						o.primaryImage ||
+						o.primaryImageSmall ||
+						(o.additionalImages && o.additionalImages[0]) ||
+						null,
+					title: o.title,
+					artist_title: o.artistDisplayName,
+					date_display: o.objectDate,
+					thumbnail: { url: o.primaryImageSmall },
+				}));
 				if (isMounted) setArts(data);
 			} catch (err) {
 				if (err.name !== "AbortError")
